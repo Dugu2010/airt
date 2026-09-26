@@ -5,16 +5,24 @@ the linked official source before relying on any number. "Confirmed" = read dire
 the provider's own documentation. "Estimate" = reported by current third-party trackers;
 not provider-published. **Nothing here is unlimited** unless a provider's own docs say so.
 
-## Puter (user-pays metering) — the workspace's active capacity
+## Puter — mixed: sponsor-priced FREE models + user-pays metered models
 
 - Access: free Puter account → API token → user-pays driver
-  (`POST https://api.puter.com/drivers/call`, `interface: "puter-chat-completion"`).
-- Semantics: usage is **metered against the account's free allowance**, with overage
-  billed by Puter. This is *user-pays metering*, not a free quota.
-- Model pricing: `https://api.puter.com/puterai/chat/models/details` publishes
-  per-model `costs.prompt_tokens` / `costs.completion_tokens` in US cents per 1M tokens.
-- No `:free` variants exist in the catalog.
-- Source: https://docs.puter.com / live API checks (2026-09-26). **Confirmed.**
+  (`POST https://api.puter.com/drivers/call`, `interface: "puter-chat-completion"`);
+  an OpenAI-compatible surface is also documented (developer.puter.com, 2026-09).
+- **Most models are genuinely $0**: the live catalog
+  (`https://api.puter.com/puterai/chat/models/details`, checked 2026-09-26) publishes
+  `costs.prompt_tokens`/`costs.completion_tokens` in US cents per 1M tokens —
+  **843 of 1030 models are 0/0 cents** (incl. claude-opus/sonnet/fable, gpt-*, gemini,
+  gemma…), i.e. sponsor-priced and free to the account. The remaining ~187+ metered
+  models (e.g. deepseek-v3.2 57/171c) are billed per usage ("User-Pays" model —
+  https://developer.puter.com/tutorials/free-unlimited-openai-api/).
+- Zero-cost ≠ unlimited: free usage carries account-level fair-use rate limits;
+  the upstream enforces them and our state store reacts to 429 with a cooldown.
+  Exact fair-use numbers are not published (**unconfirmed**).
+- Classification in this router: catalog models with 0/0 costs are flagged `free: true`
+  and join the free-first pool; priced models are the paid fallback.
+- No `:free`-suffix variants exist in the catalog (zero cost is the free marker).
 
 ## Google AI Studio (Gemini API)
 

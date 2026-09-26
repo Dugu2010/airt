@@ -91,6 +91,9 @@ export class PuterAdapter implements ProviderAdapter {
           audio: m.modalities?.input?.includes("audio") ?? undefined,
           inputCostCentsPerMTok: m.costs?.prompt_tokens ?? undefined,
           outputCostCentsPerMTok: m.costs?.completion_tokens ?? undefined,
+          // Sponsor-priced models publish 0 cents/MTok -> genuinely $0 to the
+          // account (fair-use rate limits still apply, handled reactively).
+          free: (m.costs?.prompt_tokens === 0 && m.costs?.completion_tokens === 0) || undefined,
         }));
       this.registry.refresh(entries);
       this.catalogLoaded = true;

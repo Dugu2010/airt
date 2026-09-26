@@ -135,9 +135,10 @@ export interface ProviderModelInfo {
   inputCostCentsPerMTok: number | null; // null = unknown/unmetered
   outputCostCentsPerMTok: number | null;
   tier: "top" | "strong" | "mid" | "light";
-  /** True when the model is served on a provider's permanently-free tier
-   * (groq, google-ai-studio, mistral, openrouter `:free`). Absent/false =
-   * paid/credit-metered (puter, puter-direct, cerebras, nvidia, paid openrouter). */
+  /** True when the model is served on a provider's permanently-free tier:
+   * groq, google-ai-studio, mistral, openrouter `:free`, and Puter's
+   * sponsor-priced catalog entries (0/0 US cents per MTok). Absent/false =
+   * paid/credit-metered (metered puter models, cerebras, nvidia, paid openrouter). */
   free?: boolean;
 }
 
