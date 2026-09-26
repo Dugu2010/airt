@@ -324,7 +324,14 @@ async function routePinned(req: ChatCompletionRequest, mode: RoutingMode) {
   };
   const { scored } = scoreCandidates(ctx);
   const pinned = scored.find((c) => c.model === req.model);
-  const order = pinned ? [pinned, ...scored.filter((c) => c.model !== req.model)] : scored;
+  // Free-first fallback: when the pinned model fails or doesn't exist, the
+  // sweep prefers permanently-free candidates before paid ones.
+  const rest = scored.filter((c) => c.model !== req.model);
+  const preferFree = (cfg.freeFirst ?? true) || mode === "free";
+  const freeRest = rest.filter((c) => c.free === true);
+  const paidRest = rest.filter((c) => c.free !== true);
+  const fallbackOrder = preferFree && freeRest.length > 0 ? [...freeRest, ...paidRest] : rest;
+  const order = pinned ? [pinned, ...fallbackOrder] : fallbackOrder;
 
   if (order.length === 0) {
     throw new Error("No eligible candidates for pinned model routing");
