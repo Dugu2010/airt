@@ -116,7 +116,8 @@ export interface ScoredCandidate {
   model: string;
   score: number;
   reasons: string[];
-  /** True when this candidate rides a permanently-free tier. */
+  /** Member of the free-first decision pool: permanently-free tier, or (in
+   * explicit FREE mode) cheap-class capacity with very low/unknown cost. */
   free?: boolean;
   /** 0..1 quota headroom estimate for the candidate's provider (null = unknown). */
   quotaRemaining?: number | null;
