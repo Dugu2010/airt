@@ -500,7 +500,9 @@ function readBody(req: IncomingMessage): Promise<string> {
 }
 
 server.listen(cfg.port, "0.0.0.0", () => {
-  console.log(`[router] listening on :${cfg.port} (decision=${cfg.rulesOnly ? "rules-only" : cfg.decisionModel})`);
+  const addr = server.address();
+  const shown = addr && typeof addr === "object" ? addr.port : cfg.port;
+  console.log(`[router] listening on :${shown} (decision=${cfg.rulesOnly ? "rules-only" : cfg.decisionModel})`);
 });
 
 export { server, cfg, engine, registry, state, puter };

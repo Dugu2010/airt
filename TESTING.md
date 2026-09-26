@@ -5,7 +5,7 @@
 | Suite | Location | What it covers |
 |---|---|---|
 | Unit | `tests/unit/` | analyzer (task classification, difficulty, signals, token estimation), error taxonomy + sanitization, state store (breakers, windows, quota) |
-| Integration | `tests/integration/` | full routing against a local mock Puter wrapper, cross-provider stub failover, AI decision audits, adversarial streaming, concurrency, circuit recovery, catalog resilience, huge context, security, failover matrix |
+| Integration | `tests/integration/` | full routing against a local mock Puter wrapper, cross-provider stub failover, AI decision audits, adversarial streaming, concurrency, circuit recovery, catalog resilience, huge context, security, failover matrix, OpenAI-compat wire contracts (Groq/OpenRouter vs a mock OpenAI server) |
 | E2E (live) | `tests/e2e/live.e2e.test.ts` | real router server + real Puter wrapper: modes, tool-calling, streaming, pinned models, puter-direct registration, **real cross-provider failover with a dead wrapper host**. Auto-skips without credentials. |
 
 ## Adversarial streaming coverage
@@ -29,6 +29,20 @@ partial-vs-failover; nothing silently concatenates incompatible partials.
 counter consistency (`rpm` equals requests started), correct circuit behavior
 under parallel failure, zero secret leakage in traces, and healthy-provider
 distribution when one provider fails.
+
+## OpenAI-compat wire contracts
+
+`tests/integration/openai-compat.test.ts` runs the **Groq and OpenRouter adapters**
+against a local mock server speaking the OpenAI wire protocol. These providers have no
+credentials in this workspace (live verification impossible), so this suite is their
+contract guard: /models discovery mapping (context, tools, vision, pricing → cost,
+`:free` detection, tier classification), wire-request shape (bearer auth, namespaced-id
+stripping, `max_tokens → max_completion_tokens`, passthrough of temperature/tool_choice/
+response_format/seed), tool-call mapping, SSE streaming (deltas + usage + `[DONE]`), the
+full HTTP error matrix (429 + Retry-After, 401, 402, context-overflow message, 503, 404,
+malformed JSON, missing message shape), discovery-failure fallback, and the
+`supports()` ownership/capability contract. When real keys appear,
+`scripts/probe-multi.ts` provides the live smoke test.
 
 ## Circuit-breaker lifecycle
 

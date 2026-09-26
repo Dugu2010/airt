@@ -57,7 +57,7 @@ export class OpenRouterAdapter extends OpenAiCompatAdapter {
 function classifyOpenRouterTier(id: string, isFree: boolean, ctx: number): ProviderModelInfo["tier"] {
   const m = id.toLowerCase();
   // strong families keep their strength even in free variants
-  if (/deepseek-r1|deepseek-v3|qwen3-235b|llama-3\.3-70b|gpt-oss-120b|kimi-k2|glm-4\.6|nemotron-ultra/.test(m)) return "strong";
+  if (/deepseek-r1|deepseek-v3|deepseek-chat|qwen3-235b|llama-3\.3-70b|gpt-oss-120b|kimi-k2|glm-4\.6|nemotron-ultra/.test(m)) return "strong";
   if (/opus|gpt-5(?!-)|gpt-5\.|o3|o4|grok-4|gemini-2\.5-pro|claude-sonnet-4/.test(m)) return "top";
   if (/deepseek|qwen|llama|mistral|glm|gpt-oss/.test(m)) return "mid";
   if (isFree && ctx >= 32_000) return "mid";

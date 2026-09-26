@@ -86,7 +86,9 @@ export abstract class OpenAiCompatAdapter implements ProviderAdapter {
 
   supports(model: string, req: { tools?: boolean; vision?: boolean; minContext?: number }): boolean {
     const cap = this.capabilities(model);
-    if (!cap) return req.minContext == null;
+    // Unknown model: only claim support when NO constraints are requested —
+    // never silently claim tool/vision/context capability we cannot verify.
+    if (!cap) return req.minContext == null && !req.tools && !req.vision;
     if (req.tools && !cap.tools) return false;
     if (req.vision && !cap.vision) return false;
     if (req.minContext != null && cap.context < req.minContext) return false;

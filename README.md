@@ -244,7 +244,7 @@ bun run start          # node dist/server.js
 cd router
 bun run typecheck                                   # tsc --noEmit (= lint)
 bun run test:unit                                   # 37 unit tests
-bun run test:integration                            # 123 integration tests
+bun run test:integration                            # 140 integration tests
 PUTER_WRAPPER_KEY=<key> bun run test:e2e            # 12 live E2E tests (skips without key)
 bun run build                                       # tsc → dist/
 
@@ -253,7 +253,7 @@ PUTER_WRAPPER_KEY=… PUTER_API_KEY=… bun scripts/probe-multi.ts   # both Pute
 PUTER_WRAPPER_KEY=… bun scripts/bench.ts                        # routing benchmark
 ```
 
-Current results: typecheck/lint clean · unit **37/37** · integration **123/123** ·
+Current results: typecheck/lint clean · unit **37/37** · integration **140/140** ·
 E2E **12/12** (live, incl. real cross-provider failover) · build clean.
 
 ## Test coverage
@@ -261,7 +261,7 @@ E2E **12/12** (live, incl. real cross-provider failover) · build clean.
 - **Unit (37)** — analyzer task classification/difficulty/signals; error taxonomy,
   retryability, sanitization; state store (circuit breaker open/cooldown/recovery, rate
   windows, health EMA, quota exhaustion).
-- **Integration (123)** — against a local mock Puter wrapper: all six modes, tool-calling,
+- **Integration (140)** — against a local mock Puter wrapper: all six modes, tool-calling,
   vision filtering, huge-context shrink + failover, HTTP status matrix (401/402/403/404/
   408/409/413/422/429/5xx), timeout, connection failure, malformed responses, quota
   exhaustion, provider outage, retry/backoff, circuit breaker, streaming, structured
@@ -271,7 +271,9 @@ E2E **12/12** (live, incl. real cross-provider failover) · build clean.
   (1–50 parallel, state consistency, secret-leak checks), circuit-breaker lifecycle
   (half-open recovery incl. regression test), catalog resilience, huge-context stress,
   FREE-mode paid-fallback policy, and AI decision-layer audits (injection, duplicates,
-  ghost models, decision-model 429/5xx/auth, enormous candidate lists).
+  ghost models, decision-model 429/5xx/auth, enormous candidate lists) — plus OpenAI-compat
+  wire contracts for the Groq/OpenRouter adapters against a mock OpenAI server (discovery
+  mapping, wire shape, error matrix, streaming; see TESTING.md).
 - **E2E (12, live)** — boots the real server with the real wrapper: health, live catalog
   models, auto-routing (trivial → cheap model, AI decision source), hard task → top-tier
   (`gpt-6-sol` observed), quality mode, **free mode → cheap-band model (chosen model's live

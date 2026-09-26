@@ -60,13 +60,14 @@ export class ModelRegistry {
   refresh(entries: Array<Partial<ProviderModelInfo> & { id: string }>): void {
     for (const e of entries) {
       const existing = this.models.get(e.id);
+      // Adapters that classify their own models (OpenAI-compatible providers)
+      // pass `tier` explicitly; their classification wins. Puter adapters omit
+      // it, preserving the seed tier for known entries.
+      const tier: ProviderModelInfo["tier"] =
+        e.tier ?? (existing ? existing.tier : inferTierFromCost(e.inputCostCentsPerMTok));
       if (existing) {
-        this.models.set(e.id, { ...existing, ...e, tier: existing.tier });
+        this.models.set(e.id, { ...existing, ...e, tier });
       } else {
-        // Unknown model: infer tier from cost when possible.
-        const inCost = e.inputCostCentsPerMTok;
-        const tier: ProviderModelInfo["tier"] =
-          inCost == null ? "mid" : inCost <= 10 ? "light" : inCost <= 50 ? "mid" : inCost <= 200 ? "strong" : "top";
         this.models.set(e.id, {
           id: e.id,
           context: e.context ?? 128_000,
@@ -89,4 +90,13 @@ export class ModelRegistry {
   all(): ProviderModelInfo[] {
     return [...this.models.values()];
   }
+}
+
+/** Cost-based tier inference for unknown models whose adapter does not classify. */
+function inferTierFromCost(inputCostCentsPerMTok: number | null | undefined): ProviderModelInfo["tier"] {
+  if (inputCostCentsPerMTok == null) return "mid";
+  if (inputCostCentsPerMTok <= 10) return "light";
+  if (inputCostCentsPerMTok <= 50) return "mid";
+  if (inputCostCentsPerMTok <= 200) return "strong";
+  return "top";
 }
