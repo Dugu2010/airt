@@ -216,7 +216,8 @@ describe("context overflow handling", () => {
 
 describe("health state effects", () => {
   it("records successes into EMA and success rate", async () => {
-    mock.setBehavior({});
+    // small mock latency: a sub-millisecond round trip rounds durationMs to 0
+    mock.setBehavior({ delayMs: 5 });
     const h = makeHarness({ wrapperBase: mock.base });
     await route(h.engine, {});
     await route(h.engine, {});

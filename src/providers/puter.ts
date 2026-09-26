@@ -70,31 +70,10 @@ export class PuterAdapter implements ProviderAdapter {
       });
       clearTimeout(timer);
       if (!res.ok) throw new Error(`catalog HTTP ${res.status}`);
-      const json = (await res.json()) as {
-        models?: Array<{
-          puterId?: string;
-          context?: number;
-          max_tokens?: number;
-          tool_call?: boolean;
-          modalities?: { input?: string[] };
-          costs?: { prompt_tokens?: number; completion_tokens?: number };
-        }>;
-      };
+      const json = (await res.json()) as { models?: PuterCatalogEntry[] };
       const entries = (json.models ?? [])
-        .filter((m) => typeof m.puterId === "string")
-        .map((m) => ({
-          id: m.puterId as string,
-          context: m.context ?? undefined,
-          maxOutput: m.max_tokens ?? undefined,
-          tools: m.tool_call ?? undefined,
-          vision: m.modalities?.input?.includes("image") ?? undefined,
-          audio: m.modalities?.input?.includes("audio") ?? undefined,
-          inputCostCentsPerMTok: m.costs?.prompt_tokens ?? undefined,
-          outputCostCentsPerMTok: m.costs?.completion_tokens ?? undefined,
-          // Sponsor-priced models publish 0 cents/MTok -> genuinely $0 to the
-          // account (fair-use rate limits still apply, handled reactively).
-          free: (m.costs?.prompt_tokens === 0 && m.costs?.completion_tokens === 0) || undefined,
-        }));
+        .map((m) => catalogEntryToRegistry(m))
+        .filter((e): e is NonNullable<typeof e> => e !== null);
       this.registry.refresh(entries);
       this.catalogLoaded = true;
     } catch {
@@ -404,3 +383,59 @@ function stripMessage(m: ChatMessage): Record<string, unknown> {
 }
 
 export { estimateTokens };
+
+/** One row of https://api.puter.com/puterai/chat/models/details. */
+export interface PuterCatalogEntry {
+  puterId?: string;
+  id?: string;
+  input_cost_key?: string;
+  output_cost_key?: string;
+  context?: number;
+  max_tokens?: number;
+  tool_call?: boolean;
+  modalities?: { input?: string[] };
+  costs?: Record<string, unknown>;
+}
+
+/**
+ * Convert a live catalog row into a registry refresh entry.
+ * Cost key names differ per upstream (prompt_tokens/completion_tokens vs
+ * prompt/completion vs input/output) — each row declares its own via
+ * input_cost_key/output_cost_key. Rows whose prompt AND completion cost are
+ * 0 cents are sponsor-priced (Puter's free tier, ~31 models as of 2026-09-26)
+ * and get free: true; fair-use rate limits still apply (reactive 429 path).
+ */
+export function catalogEntryToRegistry(
+  entry: PuterCatalogEntry,
+  idPrefix = ""
+): (Partial<ProviderModelInfo> & { id: string }) | null {
+  const rawId = entry.puterId ?? (typeof entry.id === "string" && entry.id.includes(":") ? entry.id : undefined);
+  if (!rawId) return null;
+  const costs = entry.costs ?? {};
+  const inKey = entry.input_cost_key ?? "prompt_tokens";
+  const outKey = entry.output_cost_key ?? "completion_tokens";
+  const inCost = typeof costs[inKey] === "number" ? (costs[inKey] as number) : undefined;
+  const outCost = typeof costs[outKey] === "number" ? (costs[outKey] as number) : undefined;
+  const sponsorPriced = inCost === 0 && outCost === 0;
+  return {
+    id: `${idPrefix}${rawId}`,
+    context: entry.context ?? undefined,
+    maxOutput: entry.max_tokens ?? undefined,
+    tools: entry.tool_call ?? undefined,
+    vision: entry.modalities?.input?.includes("image") ?? undefined,
+    audio: entry.modalities?.input?.includes("audio") ?? undefined,
+    inputCostCentsPerMTok: inCost,
+    outputCostCentsPerMTok: outCost,
+    free: sponsorPriced ? true : undefined,
+    // Seed-pinned ids keep their curated tier (undefined tier = no override);
+    // new sponsor-priced ids get a family hint instead of cost-based "light".
+    tier: sponsorPriced ? sponsorTier(rawId) : undefined,
+  };
+}
+
+function sponsorTier(id: string): ProviderModelInfo["tier"] {
+  const m = id.toLowerCase();
+  if (/ultra|550b|235b|kimi-k2|nemotron-3-super|v4-(pro|flash)|qwen3\.8-27b|inkling(?!-small)/.test(m)) return "strong";
+  if (/flash|mini|nano|lite|-2\.6b|bonsai|30b|preview/.test(m)) return "light";
+  return "mid";
+}

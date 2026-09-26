@@ -10,19 +10,25 @@ not provider-published. **Nothing here is unlimited** unless a provider's own do
 - Access: free Puter account → API token → user-pays driver
   (`POST https://api.puter.com/drivers/call`, `interface: "puter-chat-completion"`);
   an OpenAI-compatible surface is also documented (developer.puter.com, 2026-09).
-- **Most models are genuinely $0**: the live catalog
-  (`https://api.puter.com/puterai/chat/models/details`, checked 2026-09-26) publishes
-  `costs.prompt_tokens`/`costs.completion_tokens` in US cents per 1M tokens —
-  **843 of 1030 models are 0/0 cents** (incl. claude-opus/sonnet/fable, gpt-*, gemini,
-  gemma…), i.e. sponsor-priced and free to the account. The remaining ~187+ metered
-  models (e.g. deepseek-v3.2 57/171c) are billed per usage ("User-Pays" model —
+- **31 models are genuinely $0 (sponsor-priced)**: the live catalog
+  (`https://api.puter.com/puterai/chat/models/details`, checked 2026-09-26) has
+  1030 rows; **31 publish 0-cent prompt AND completion costs** — e.g.
+  `google/gemma-4-26b-a4b-it`, `infron:deepseek/deepseek-v4-flash:free`,
+  `openrouter:nvidia/nemotron-3-ultra-550b-a55b:free`, `openrouter/free`.
+  Cost key names vary per upstream (`prompt_tokens`/`completion_tokens` vs
+  `prompt`/`completion` vs `input`/`output`) — each row declares its own via
+  `input_cost_key`/`output_cost_key`, so naive `prompt_tokens===0` parsing
+  mis-reads ~841 rows as "zero cost" when they merely use other keys. The
+  remaining ~999 are metered per token ("User-Pays" model —
   https://developer.puter.com/tutorials/free-unlimited-openai-api/).
 - Zero-cost ≠ unlimited: free usage carries account-level fair-use rate limits;
   the upstream enforces them and our state store reacts to 429 with a cooldown.
   Exact fair-use numbers are not published (**unconfirmed**).
-- Classification in this router: catalog models with 0/0 costs are flagged `free: true`
-  and join the free-first pool; priced models are the paid fallback.
-- No `:free`-suffix variants exist in the catalog (zero cost is the free marker).
+- Classification in this router: catalog rows whose declared input+output cost
+  keys are both 0 are flagged `free: true` and join the free-first pool; priced
+  models are the paid fallback.
+- Many `:free`-suffix ids exist via Puter's OpenRouter/Infron proxy rows; the
+  zero-cost check (not the suffix) is the free marker.
 
 ## Google AI Studio (Gemini API)
 

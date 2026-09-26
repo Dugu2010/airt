@@ -10,6 +10,7 @@ import {
   type ClassifiedError,
 } from "../core/types.js";
 import { ModelRegistry } from "../registry/registry.js";
+import { catalogEntryToRegistry, type PuterCatalogEntry } from "./puter.js";
 import {
   ClassifiedUpstreamError,
   classifyHttpError,
@@ -68,30 +69,10 @@ export class PuterDirectAdapter implements ProviderAdapter {
       });
       clearTimeout(timer);
       if (res.ok) {
-        const json = (await res.json()) as {
-          models?: Array<{
-            puterId?: string;
-            context?: number;
-            max_tokens?: number;
-            tool_call?: boolean;
-            modalities?: { input?: string[] };
-            costs?: { prompt_tokens?: number; completion_tokens?: number };
-          }>;
-        };
+        const json = (await res.json()) as { models?: PuterCatalogEntry[] };
         const entries = (json.models ?? [])
-          .filter((m) => typeof m.puterId === "string")
-          .map((m) => ({
-            id: `puter-direct:${m.puterId as string}`,
-            context: m.context ?? undefined,
-            maxOutput: m.max_tokens ?? undefined,
-            tools: m.tool_call ?? undefined,
-            vision: m.modalities?.input?.includes("image") ?? undefined,
-            audio: m.modalities?.input?.includes("audio") ?? undefined,
-            inputCostCentsPerMTok: m.costs?.prompt_tokens ?? undefined,
-            outputCostCentsPerMTok: m.costs?.completion_tokens ?? undefined,
-            // Sponsor-priced models publish 0 cents/MTok -> genuinely $0 to the account.
-            free: (m.costs?.prompt_tokens === 0 && m.costs?.completion_tokens === 0) || undefined,
-          }));
+          .map((m) => catalogEntryToRegistry(m, "puter-direct:"))
+          .filter((e): e is NonNullable<typeof e> => e !== null);
         if (entries.length > 0) this.registry.refresh(entries);
       }
     } catch {

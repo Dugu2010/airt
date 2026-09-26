@@ -6,9 +6,11 @@ import type { ProviderModelInfo } from "../core/types.js";
  * The live refresh (`refreshFromCatalog`) overrides context/cost/modality
  * fields from the current catalog, so these entries mainly pin tiers and ids.
  *
- * Free-access note: all Puter models are reachable via the user-pays driver;
- * usage is metered against the account's free allowance. Cheap-cost models
- * conserve that allowance best — there is no "unlimited free" tier.
+ * Free-access note: metered models are billed per token via the user-pays
+ * driver; in addition, ~31 catalog rows publish 0-cent prompt+completion costs
+ * (sponsor-priced `:free`/gemma entries as of 2026-09-26) — the live refresh
+ * flags those `free: true`. Fair-use rate limits still apply; nothing here is
+ * unlimited.
  */
 export const PUTER_REGISTRY_SEED: ProviderModelInfo[] = [
   // ---- top tier (strongest general/reasoning/coding) ----
@@ -78,6 +80,7 @@ export class ModelRegistry {
           inputCostCentsPerMTok: e.inputCostCentsPerMTok ?? null,
           outputCostCentsPerMTok: e.outputCostCentsPerMTok ?? null,
           tier,
+          free: e.free,
         });
       }
     }
