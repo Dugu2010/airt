@@ -33,6 +33,7 @@ export class GroqAdapter extends OpenAiCompatAdapter {
       inputCostCentsPerMTok: null, // free-tier unmetered; paid rates not assumed
       outputCostCentsPerMTok: null,
       tier: classifyGroqTier(id, ctx),
+      free: true, // entire Groq API rides the permanently-free tier
     };
   }
 

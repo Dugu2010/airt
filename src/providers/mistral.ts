@@ -33,6 +33,7 @@ export class MistralAdapter extends OpenAiCompatAdapter {
       inputCostCentsPerMTok: null,
       outputCostCentsPerMTok: null,
       tier: classifyMistralTier(id),
+      free: true, // free "experimental" plan (~1 req/s, monthly token allowance)
     };
   }
 

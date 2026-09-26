@@ -34,6 +34,7 @@ export interface StubModelSpec {
   tools?: boolean;
   vision?: boolean;
   inputCostCentsPerMTok?: number | null;
+  free?: boolean;
 }
 
 export interface StubScript {
@@ -190,5 +191,6 @@ function toInfo(m: StubModelSpec): ProviderModelInfo {
     inputCostCentsPerMTok: m.inputCostCentsPerMTok ?? 50,
     outputCostCentsPerMTok: m.inputCostCentsPerMTok ?? 50,
     tier: m.tier,
+    free: m.free,
   };
 }

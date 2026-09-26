@@ -116,6 +116,10 @@ export interface ScoredCandidate {
   model: string;
   score: number;
   reasons: string[];
+  /** True when this candidate rides a permanently-free tier. */
+  free?: boolean;
+  /** 0..1 quota headroom estimate for the candidate's provider (null = unknown). */
+  quotaRemaining?: number | null;
 }
 
 /** ---- Provider contracts ---- */
@@ -130,6 +134,10 @@ export interface ProviderModelInfo {
   inputCostCentsPerMTok: number | null; // null = unknown/unmetered
   outputCostCentsPerMTok: number | null;
   tier: "top" | "strong" | "mid" | "light";
+  /** True when the model is served on a provider's permanently-free tier
+   * (groq, google-ai-studio, mistral, openrouter `:free`). Absent/false =
+   * paid/credit-metered (puter, puter-direct, cerebras, nvidia, paid openrouter). */
+  free?: boolean;
 }
 
 export interface HealthState {

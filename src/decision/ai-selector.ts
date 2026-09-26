@@ -10,7 +10,7 @@ export interface AiSelectorConfig {
 
 export interface AiSelectorInput {
   ctx: DecisionContext;
-  candidates: Array<{ model: string; score: number }>;
+  candidates: Array<{ model: string; score: number; free?: boolean; quotaRemaining?: number | null }>;
   taskText: string;
 }
 
@@ -18,6 +18,9 @@ const SYSTEM_PROMPT = `You are the model-selection brain of an AI inference rout
 Given a request and candidate models, pick the BEST model for THIS request.
 Task fit first (capability needed), then cost efficiency, then speed.
 Trivial tasks should use cheap fast models; hard reasoning/coding deserves top-tier models.
+Candidates are annotated with tier and, for free-tier models, remaining daily quota.
+ALWAYS prefer a FREE-tier model with remaining quota that can handle the task;
+choose a PAID model only when no free candidate is adequate.
 Respond with ONLY minified JSON, no markdown: {"order":["<model-id>",...]}
 Include 2-4 model ids from the candidate list, best first.`;
 
@@ -43,7 +46,12 @@ export async function aiSelectModels(cfg: AiSelectorConfig, input: AiSelectorInp
     `TASK: type=${ctx.analysis.primary} difficulty=${ctx.analysis.difficulty} est_prompt_tokens=${ctx.analysis.estimatedPromptTokens} tools=${ctx.tools.length > 0}`,
     `MODE: ${ctx.mode}`,
     `CANDIDATES:`,
-    ...candidates.slice(0, 8).map((c, i) => `${i + 1}. ${c.model}`),
+    ...candidates.slice(0, 8).map((c, i) => {
+      const tag = c.free === true
+        ? `FREE${c.quotaRemaining != null ? ` · ~${Math.round(c.quotaRemaining * 100)}% quota left` : " · quota unknown"}`
+        : "PAID";
+      return `${i + 1}. [${tag}] ${c.model} (score ${c.score.toFixed(2)})`;
+    }),
   ].join("\n");
 
   for (const model of [cfg.model, ...cfg.fallbackModels]) {

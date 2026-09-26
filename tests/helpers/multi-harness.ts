@@ -11,6 +11,7 @@ export interface MultiHarnessOptions {
   decision?: AiSelectorConfig | null;
   maxRetries?: number;
   timeoutMs?: number;
+  freeFirst?: boolean;
 }
 
 export function makeMultiHarness(opts: MultiHarnessOptions) {
@@ -21,6 +22,7 @@ export function makeMultiHarness(opts: MultiHarnessOptions) {
     decision: opts.decision ?? null,
     maxRetries: opts.maxRetries ?? 3,
     timeoutMs: opts.timeoutMs ?? 5_000,
+    freeFirst: opts.freeFirst,
   });
   return { registry, providers, engine };
 }

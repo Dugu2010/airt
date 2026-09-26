@@ -41,15 +41,22 @@ export interface ScoreOptions {
   ignoreCircuit?: boolean;
 }
 
-/** Deterministic scoring — always runs, provides the candidate pool + baseline order. */
+/** Max input cost (cents/MTok) that still counts as "cheap-class" free capacity in explicit FREE mode. */
+const FREE_CENTS_MAX = 10;
+
+/** Deterministic scoring — always runs, provides the candidate pool + baseline order.
+ *
+ * Free-tier candidates score their "cost" slot by quota HEADROOM instead of price:
+ * cost is uniformly zero on a free tier, so remaining daily allowance is the scarce
+ * resource that differentiates them. Paid candidates keep price-based cost scoring.
+ */
 export function scoreCandidates(
   ctx: DecisionContext,
   options: ScoreOptions = {}
-): { scored: ScoredCandidate[]; rejected: Array<{ model: string; reason: string }>; freeCheapExhausted?: boolean } {
+): { scored: ScoredCandidate[]; rejected: Array<{ model: string; reason: string }> } {
   const w = MODE_WEIGHTS[ctx.mode];
   const scored: ScoredCandidate[] = [];
   const rejected: Array<{ model: string; reason: string }> = [];
-  const tierByModel = new Map<string, string>();
 
   const needsTools = ctx.tools.length > 0;
   const needsVision = ctx.analysis.requiresVision;
@@ -60,7 +67,6 @@ export function scoreCandidates(
     for (const model of adapter.listModelsSync()) {
       const cap = adapter.capabilities(model);
       if (!cap) continue;
-      tierByModel.set(model, cap.tier);
 
       // hard filters
       if (needsTools && !cap.tools) {
@@ -92,7 +98,15 @@ export function scoreCandidates(
         (health.successRate ?? 0.8) * 0.5 + (health.open ? 0 : 0.3) + Math.max(0, 1 - (health.latencyEmaMs ?? 1500) / 10_000) * 0.2;
 
       const inCost = cap.inputCostCentsPerMTok ?? 100;
-      const costScore = Math.max(0, 1 - inCost / 500);
+      const isFreeCap = cap.free === true;
+      // FREE-mode pool: genuine free tiers plus cheap-class capacity (historical
+      // "free/cheap candidate" semantics — very low or unknown cost).
+      const freePoolEligible =
+        isFreeCap ||
+        (ctx.mode === "free" && cap.free !== false && (cap.inputCostCentsPerMTok == null || inCost <= FREE_CENTS_MAX));
+      const quotaRemaining = isFreeCap ? quotaHeadroom(state, adapter.name) : null;
+      // free candidates: cost slot = quota headroom; unknown headroom is neutral
+      const costScore = isFreeCap ? quotaRemaining ?? 0.5 : Math.max(0, 1 - inCost / 500);
       const speedScore =
         Math.max(0, 1 - (health.latencyEmaMs ?? 1500) / 6_000) * 0.6 + (cap.tier === "light" ? 0.4 : cap.tier === "mid" ? 0.25 : 0.05);
       const fit = fitScore(ctx.analysis, cap);
@@ -103,39 +117,65 @@ export function scoreCandidates(
         provider: adapter.name,
         model,
         score: Number(total.toFixed(4)),
-        reasons: [`tier=${cap.tier} capability=${capability.toFixed(2)}`, `cost=${inCost}c/MTok`, `mode=${ctx.mode}`],
+        reasons: [
+          `tier=${cap.tier} capability=${capability.toFixed(2)}`,
+          isFreeCap
+            ? `free-tier${quotaRemaining != null ? ` quota ${Math.round(quotaRemaining * 100)}% left` : ""}`
+            : `cost=${inCost}c/MTok`,
+          `mode=${ctx.mode}`,
+        ],
+        free: freePoolEligible || undefined,
+        quotaRemaining,
       });
     }
   }
 
   scored.sort((a, b) => b.score - a.score);
-
-  // FREE mode conserves money/allowance: when the task does not demand top-tier
-  // capability, restrict the pool to cheaper tiers (light/mid). Every model in
-  // `scored` already passed the hard filters (tools/vision/context/health), so
-  // the restricted pool remains capability-compatible by construction. If no
-  // cheaper model can serve the request, the full pool is kept — the caller
-  // (decideRouting) applies the configured paid-fallback policy to that case.
-  if (ctx.mode === "free" && ctx.analysis.difficulty <= 3 && scored.length >= 1) {
-    const cheap = scored.filter((c) => {
-      const t = tierByModel.get(c.model);
-      return t === "light" || t === "mid";
-    });
-    if (cheap.length > 0) {
-      const cheapSet = new Set(cheap.map((c) => c.model));
-      const skipped = scored.filter((c) => !cheapSet.has(c.model)).map((c) => ({
-        model: c.model,
-        reason: "free mode: expensive tier skipped (cost minimization)",
-      }));
-      return { scored: cheap, rejected: [...rejected, ...skipped] };
-    }
-    // No light/mid candidate survived the hard filters: the only options are
-    // expensive. Flag it so decideRouting can apply the configured fallback
-    // policy (reject = never silently spend money).
-    return { scored, rejected, freeCheapExhausted: true };
-  }
-
   return { scored, rejected };
+}
+
+/** 0..1 daily quota headroom for a provider's free tier (null = unknown). */
+function quotaHeadroom(state: ProviderStateStore, provider: string): number | null {
+  const q = state.quota(provider);
+  if (q.dailyRequestsQuota != null && q.dailyRequestsQuota > 0) {
+    return Math.max(0, Math.min(1, (q.dailyRequestsQuota - q.requestsToday) / q.dailyRequestsQuota));
+  }
+  if (q.dailyTokenBudget != null && q.dailyTokenBudget > 0) {
+    return Math.max(0, Math.min(1, (q.dailyTokenBudget - q.tokensUsedToday) / q.dailyTokenBudget));
+  }
+  return null;
+}
+
+/** Free-first pool selection: the primary routing policy.
+ *
+ * - FREE-tier candidates (models on a permanently-free provider tier whose
+ *   quota is not exhausted) always form the decision pool when any exist.
+ * - When no free candidate survived the hard filters, the PAID pool (puter
+ *   best-suited + cheapest via mode weights) takes over — "all quotas over,
+ *   switch to puter".
+ * - `mode === "free"` is strict: paid is permitted only when the configured
+ *   freeFallbackPolicy is "allow-paid"; "reject" refuses to spend instead.
+ * - freeFirst disabled + non-free mode → null (legacy all-candidates behavior).
+ */
+export interface PoolSelection {
+  kind: "free" | "paid";
+  entries: ScoredCandidate[];
+}
+
+export function selectPool(
+  scored: ScoredCandidate[],
+  mode: RoutingMode,
+  opts: { freeFirst: boolean; freeFallbackPolicy: "reject" | "allow-paid" }
+): PoolSelection | null {
+  const free = scored.filter((c) => c.free === true);
+  if (free.length > 0 && (opts.freeFirst || mode === "free")) return { kind: "free", entries: free };
+
+  if (mode === "free") {
+    if (opts.freeFallbackPolicy === "allow-paid") return { kind: "paid", entries: scored };
+    return { kind: "free", entries: [] }; // strict: refuse to spend (decideRouting rejects)
+  }
+  if (opts.freeFirst) return { kind: "paid", entries: scored };
+  return null;
 }
 
 function fitScore(analysis: TaskAnalysis, cap: ProviderModelInfo_t): number {
@@ -151,47 +191,31 @@ type ProviderModelInfo_t = Parameters<ProviderAdapter["capabilities"]>[0] extend
 
 /**
  * Decide the routing order.
- * 1. deterministic scoring produces the candidate pool
- * 2. AI decision model (when enabled + reachable) re-ranks the top candidates
- * 3. falls back to deterministic order if AI is unavailable/slow/malformed
+ * 1. deterministic scoring produces the candidate pool (free-aware: free-tier
+ *    candidates score quota headroom in the cost slot)
+ * 2. free-first pool selection (see selectPool) picks the decision pool
+ * 3. AI decision model (when enabled + reachable) re-ranks the pool candidates
+ * 4. falls back to deterministic order if AI is unavailable/slow/malformed
  *
- * FREE mode skips the AI re-rank entirely: cost is the binding constraint there
- * and the deterministic cost-weighted score is the only place where live
- * allowance/pricing is factored in. The AI brain sees only names, not quota.
+ * `pool` is passed by the engine's free-first flow. When omitted (legacy
+ * callers / freeFirst disabled), all scored candidates are eligible and the
+ * AI re-rank is skipped in free mode (cost is the binding constraint there).
  */
 export async function decideRouting(
   ctx: DecisionContext,
   deps: DecisionEngineDeps,
-  aiOrder?: string[] | null
+  aiOrder?: string[] | null,
+  pool?: PoolSelection | null
 ): Promise<RoutingDecision> {
   const started = Date.now();
-  const { scored, rejected, freeCheapExhausted } = scoreCandidates(ctx);
-
-  // FREE mode, strict policy: no capable cheap candidate exists — refuse to
-  // silently spend money. "allow-paid" explicitly permits the expensive pool.
-  if (ctx.mode === "free" && freeCheapExhausted && (deps.freeFallbackPolicy ?? "reject") === "reject") {
-    return {
-      provider: "none",
-      model: "none",
-      score: 0,
-      reason: `no capable free/cheap candidate (difficulty=${ctx.analysis.difficulty}); paid fallback policy=reject`,
-      decisionSource: "rules",
-      candidates: [],
-      rejected,
-      decisionLatencyMs: Date.now() - started,
-      aiOrder: aiOrder ?? null,
-    };
-  }
+  const { scored, rejected } = scoreCandidates(ctx);
 
   if (scored.length === 0) {
-    const freeBlocked = ctx.mode === "free" && rejected.some((r) => r.reason.includes("free mode"));
     return {
       provider: "none",
       model: "none",
       score: 0,
-      reason: freeBlocked
-        ? `no capable free/cheap candidate (difficulty=${ctx.analysis.difficulty}); paid fallback policy=${deps.freeFallbackPolicy ?? "reject"}`
-        : "no eligible candidates (all filtered by capability/health/quota)",
+      reason: "no eligible candidates (all filtered by capability/health/quota)",
       decisionSource: "rules",
       candidates: [],
       rejected,
@@ -200,15 +224,40 @@ export async function decideRouting(
     };
   }
 
-  let finalOrder = scored;
-  let decisionSource: RoutingDecision["decisionSource"] = "rules";
-  let reason = `deterministic ${ctx.mode}-mode scoring`;
+  if (pool != null && pool.entries.length === 0) {
+    // FREE mode, strict policy: no capable free/cheap candidate exists — refuse
+    // to silently spend money. ("allow-paid" is resolved inside selectPool.)
+    return {
+      provider: "none",
+      model: "none",
+      score: 0,
+      reason: `no capable free/cheap candidate (difficulty=${ctx.analysis.difficulty}); paid fallback policy=${deps.freeFallbackPolicy ?? "reject"}`,
+      decisionSource: "rules",
+      candidates: [],
+      rejected,
+      decisionLatencyMs: Date.now() - started,
+      aiOrder: aiOrder ?? null,
+    };
+  }
 
-  const aiAllowed = ctx.mode !== "free"; // see doc above
-  if (aiAllowed && aiOrder && aiOrder.length > 0 && scored.length > 1) {
+  const base = pool != null ? pool.entries : scored;
+  let finalOrder = base;
+  let decisionSource: RoutingDecision["decisionSource"] = "rules";
+  let reason =
+    pool != null
+      ? pool.kind === "free"
+        ? `free-first: deterministic scoring over ${base.length} free-tier model(s) with remaining quota`
+        : "all free-tier capacity exhausted — paid fallback via deterministic scoring"
+      : `deterministic ${ctx.mode}-mode scoring`;
+
+  // FREE mode is the pure-budget path: deterministic scoring only, no AI
+  // re-rank (the decision call itself spends money). Other modes re-rank the
+  // selected pool (free-first pool included) when the AI layer is reachable.
+  const aiAllowed = ctx.mode !== "free";
+  if (aiAllowed && aiOrder && aiOrder.length > 0 && base.length > 1) {
     const rank = new Map(aiOrder.map((id, i) => [id, i]));
-    const known = scored.filter((c) => rank.has(c.model));
-    const unknown = scored.filter((c) => !rank.has(c.model));
+    const known = base.filter((c) => rank.has(c.model));
+    const unknown = base.filter((c) => !rank.has(c.model));
     known.sort((a, b) => (rank.get(a.model) ?? 99) - (rank.get(b.model) ?? 99));
     if (known.length > 0) {
       finalOrder = [...known, ...unknown].map((c, i) => ({
@@ -216,7 +265,13 @@ export async function decideRouting(
         score: i === 0 ? c.score : Number((c.score - 0.0001 * i).toFixed(4)),
       }));
       decisionSource = "ai";
-      reason = `AI decision model re-ranked top candidates (top pick: ${known[0]?.model ?? "?"})`;
+      const aiPick = `AI decision model re-ranked top candidates (top pick: ${known[0]?.model ?? "?"})`;
+      reason =
+        pool != null
+          ? pool.kind === "free"
+            ? `free-first: ${aiPick}`
+            : `all free-tier capacity exhausted — paid fallback (${aiPick})`
+          : aiPick;
     }
   }
 

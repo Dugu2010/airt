@@ -9,7 +9,7 @@ import type {
   TaskAnalysis,
 } from "../core/types.js";
 import type { ProviderStateStore } from "../state/state.js";
-import { decideRouting, scoreCandidates, type DecisionContext } from "../decision/decision.js";
+import { decideRouting, scoreCandidates, selectPool, type DecisionContext } from "../decision/decision.js";
 import { aiSelectModels, type AiSelectorConfig } from "../decision/ai-selector.js";
 import { analyzeRequest } from "../analysis/analyzer.js";
 import { ClassifiedUpstreamError } from "../errors/classify.js";
@@ -21,8 +21,11 @@ export interface EngineDeps {
   decision: AiSelectorConfig | null; // null = rules-only
   maxRetries: number;
   timeoutMs: number;
-  /** FREE-mode policy when no capable free/cheap candidate exists. */
+  /** FREE-mode policy when no capable free-tier candidate exists. */
   freeFallbackPolicy?: "reject" | "allow-paid";
+  /** Free-first routing (default true): always prefer free-tier models with
+   * remaining quota; paid models (puter) serve only when free capacity is out. */
+  freeFirst?: boolean;
 }
 
 export interface RouteOutcome {
@@ -227,20 +230,29 @@ export class RoutingEngine {
   private async decide(ctx: DecisionContext) {
     const phaseStarted = Date.now();
     const { scored } = scoreCandidates(ctx);
+    // Free-first policy: free-tier candidates with remaining quota always form
+    // the decision pool when any exist; paid (puter) takes over only when they
+    // don't. FREE mode is strict per the configured fallback policy.
+    const pool = selectPool(scored, ctx.mode, {
+      freeFirst: this.deps.freeFirst ?? true,
+      freeFallbackPolicy: this.deps.freeFallbackPolicy ?? "reject",
+    });
+    const base = pool ? pool.entries : scored;
     let aiResult: string[] | null = null;
-    // FREE mode: cost is the binding constraint and decideRouting ignores the
-    // AI order there anyway — skip the wasted decision-model round-trip.
-    if (this.deps.decision && ctx.mode !== "free" && scored.length > 1) {
+    if (this.deps.decision && base.length > 1 && ctx.mode !== "free") {
       aiResult = await aiSelectModels(this.deps.decision, {
         ctx,
-        candidates: scored.slice(0, 8).map((c) => ({ model: c.model, score: c.score })),
+        candidates: base
+          .slice(0, 8)
+          .map((c) => ({ model: c.model, score: c.score, free: c.free, quotaRemaining: c.quotaRemaining })),
         taskText: flatten(ctx.messages),
       });
     }
     const decision = await decideRouting(
       ctx,
       { rulesOnly: !this.deps.decision, freeFallbackPolicy: this.deps.freeFallbackPolicy ?? "reject" },
-      aiResult
+      aiResult,
+      pool
     );
     // decision latency covers the WHOLE decide phase (AI call + scoring), so
     // traces reflect the real cost of decision-making.
@@ -254,11 +266,13 @@ export class RoutingEngine {
 
   /** Pick the next-best candidate, excluding tried models. In-flight failover
    * ignores the circuit breaker (which gates NEW requests, not the current one)
-   * but still respects quota exhaustion. After a provider-level failure
-   * (timeout/connection/5xx/429/quota) the next candidate is taken from a
-   * DIFFERENT provider when one exists — capability compatibility is already
-   * guaranteed by the hard filters in scoreCandidates. Throws the original
-   * classified error when no alternatives remain (better client diagnostics). */
+   * but still respects quota exhaustion. Free-first: remaining free-tier
+   * candidates are preferred before any paid model; strict FREE mode throws
+   * when its free pool runs out instead of spending money. After a
+   * provider-level failure (timeout/connection/5xx/429/quota) the next
+   * candidate is taken from a DIFFERENT provider when one exists — capability
+   * compatibility is already guaranteed by the hard filters in scoreCandidates.
+   * Throws a classified error when no alternatives remain (better diagnostics). */
   private nextCandidate(
     ctx: DecisionContext,
     excludeModel: string,
@@ -267,9 +281,17 @@ export class RoutingEngine {
   ) {
     const { scored } = scoreCandidates(ctx, { ignoreCircuit: true });
     const rest = scored.filter((c) => c.model !== excludeModel);
+    const freeRest = rest.filter((c) => c.free === true);
+    let candidates = rest;
+    if (freeRest.length > 0 && ((this.deps.freeFirst ?? true) || ctx.mode === "free")) {
+      candidates = freeRest;
+    } else if (ctx.mode === "free") {
+      const detail = lastError ? ` (${lastError.kind}: ${lastError.message.slice(0, 200)})` : "";
+      throw new ClassifiedUpstreamError("server", 503, `No free-tier alternative candidates available for failover${detail}`);
+    }
     const providerLevel = lastError != null && RoutingEngine.PROVIDER_LEVEL_KINDS.has(lastError.kind);
     const next =
-      (providerLevel && failedProvider ? rest.find((c) => c.provider !== failedProvider) : undefined) ?? rest[0];
+      (providerLevel && failedProvider ? candidates.find((c) => c.provider !== failedProvider) : undefined) ?? candidates[0];
     if (!next) {
       const detail = lastError ? ` (${lastError.kind}: ${lastError.message.slice(0, 200)})` : "";
       throw new ClassifiedUpstreamError("server", 503, `No alternative candidates available for failover${detail}`);

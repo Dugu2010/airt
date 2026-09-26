@@ -42,6 +42,7 @@ export class OpenRouterAdapter extends OpenAiCompatAdapter {
       inputCostCentsPerMTok: isFree ? 0 : Math.ceil(promptUsdPerMTok * 100),
       outputCostCentsPerMTok: isFree ? 0 : Math.ceil(completionUsdPerMTok * 100),
       tier: classifyOpenRouterTier(id, isFree, ctx),
+      free: isFree, // `:free` ids (and zero-priced) ride the free plan limits
     };
   }
 

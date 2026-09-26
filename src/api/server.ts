@@ -71,12 +71,7 @@ if (cfg.puterDirectEnabled) {
   });
 }
 
-// 3. Groq (free tier, per-model rate limits) — requires GROQ_API_KEY.
-if (cfg.groqApiKey) {
-  providers.push({ adapter: new GroqAdapter(registry, { baseUrl: "https://api.groq.com/openai/v1", apiKey: cfg.groqApiKey, timeoutMs: cfg.timeoutMs, name: "groq" }), state: new ProviderStateStore() });
-}
-
-// 4. OpenRouter (free :free models with plan rate limits) — requires OPENROUTER_API_KEY.
+// 3. OpenRouter (free :free models with plan rate limits) — requires OPENROUTER_API_KEY.
 if (cfg.openrouterApiKey) {
   const orState = new ProviderStateStore();
   orState.setQuotaPolicy("openrouter", {
@@ -170,6 +165,7 @@ const engine = new RoutingEngine({
   decision: decisionCfg,
   maxRetries: cfg.maxRetries,
   timeoutMs: cfg.timeoutMs,
+  freeFirst: cfg.freeFirst,
   freeFallbackPolicy: cfg.freeFallbackPolicy,
 });
 

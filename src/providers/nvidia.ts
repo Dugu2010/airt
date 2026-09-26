@@ -33,6 +33,7 @@ export class NvidiaAdapter extends OpenAiCompatAdapter {
       inputCostCentsPerMTok: null, // credit-based: no stable published per-token price
       outputCostCentsPerMTok: null,
       tier: classifyNvidiaTier(id),
+      free: false, // credit-based allocation — not a documented free tier
     };
   }
 

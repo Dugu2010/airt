@@ -22,8 +22,11 @@ export interface RouterConfig {
   mistralApiKey: string | null;
   nvidiaApiKey: string | null;
   puterDirectEnabled: boolean;
-  /** FREE-mode behavior when no capable free provider can serve the task. */
+  /** FREE-mode behavior when no capable free-tier provider can serve the task. */
   freeFallbackPolicy: "reject" | "allow-paid";
+  /** Free-first routing (default on): always prefer free-tier models with
+   * remaining quota; paid (puter) models serve only when free capacity is out. */
+  freeFirst: boolean;
 }
 
 function env(name: string): string | undefined {
@@ -69,6 +72,7 @@ export function loadConfig(): RouterConfig {
     nvidiaApiKey: env("NVIDIA_API_KEY") ?? env("NIM_API_KEY") ?? null,
     puterDirectEnabled: env("PUTER_DIRECT_ENABLED") !== "0" && (env("PUTER_DIRECT_TOKEN") ?? env("PUTER_API_KEY")) != null,
     freeFallbackPolicy: env("ROUTER_FREE_FALLBACK") === "allow-paid" ? "allow-paid" : "reject",
+    freeFirst: env("ROUTER_FREE_FIRST") !== "0",
   };
 }
 

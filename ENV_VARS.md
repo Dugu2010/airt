@@ -17,6 +17,7 @@ Copy these into `router/.env.local` (or export them). `.env.local` is gitignored
 | `MISTRAL_API_KEY` | no | — | Activates the **Mistral** provider (free experimental plan) |
 | `NVIDIA_API_KEY` / `NIM_API_KEY` | no | — | Activates the **NVIDIA NIM** provider (credit-based; not permanent free) |
 | `CEREBRAS_API_KEY` | no | — | Activates the **Cerebras** provider ($5 trial credits only — NOT permanent free) |
+| `ROUTER_FREE_FIRST` | no | `1` | `1` = every routing mode prefers capable free-tier models (quota headroom-aware) before paid capacity; `0` = classic pure-score selection |
 | `ROUTER_FREE_FALLBACK` | no | `reject` | FREE mode when no capable free/cheap candidate exists: `reject` = refuse with a clear error (never silently spend); `allow-paid` = permit paid fallback |
 | `ROUTER_DECISION_MODEL` | no | `google:google/gemini-3.5-flash-lite` | Puter model used for internal AI decisions |
 | `ROUTER_DECISION_FALLBACK_MODELS` | no | `deepseek:deepseek/deepseek-v4-flash,openai:openai/gpt-5-nano` | Decision-model fallback chain |

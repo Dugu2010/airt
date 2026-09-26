@@ -37,6 +37,7 @@ export class CerebrasAdapter extends OpenAiCompatAdapter {
       inputCostCentsPerMTok: null, // trial-tier: cost model unknown; NOT free
       outputCostCentsPerMTok: null,
       tier: /gpt-oss-120b/.test(id) ? "strong" : "mid",
+      free: false, // trial credits ($5/30d) — official FAQ: no permanently free tier
     };
   }
 

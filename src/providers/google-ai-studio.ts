@@ -40,6 +40,7 @@ export class GoogleAiStudioAdapter extends OpenAiCompatAdapter {
       inputCostCentsPerMTok: null, // free-tier unmetered; paid rates not assumed
       outputCostCentsPerMTok: null,
       tier: classifyGoogleTier(id),
+      free: true, // AI Studio free usage tier (per-project RPM/TPM/RPD)
     };
   }
 
