@@ -3,6 +3,7 @@ import type {
   ChatCompletionResponse,
   ChatMessage,
   ProviderAdapter,
+  RoutingDecision,
   RoutingMode,
   RoutingTrace,
   AttemptTrace,
@@ -67,10 +68,18 @@ export class RoutingEngine {
     }
 
     // ---- 3. execute → validate → classify → retry/switch ----------------------
+    // Failover budget: the loop keeps switching candidates until EVERY capable
+    // model has been tried (capped by MAX_FAILOVERS switches), so a provider
+    // dying mid-chain never starves the remaining providers. Same-model
+    // retries are what maxRetries governs.
     let messages = req.messages;
     let lastError: { kind: string; message: string } | null = null;
+    const triedModels = new Set<string>();
+    const providerFailCounts = new Map<string, number>();
+    let sameModelTries = 0; // retries of the CURRENT model (governed by maxRetries)
+    const totalCap = this.deps.maxRetries + 1 + RoutingEngine.MAX_FAILOVERS;
 
-    for (let attempt = 1; attempt <= this.deps.maxRetries + 1; attempt++) {
+    for (let attempt = 1; attempt <= totalCap; attempt++) {
       const provider = this.deps.providers.find((p) => p.adapter.name === decision.provider);
       const adapter = provider?.adapter;
       const state = provider?.state;
@@ -79,6 +88,7 @@ export class RoutingEngine {
         lastError = { kind: "routing", message: "selected provider missing" };
         break;
       }
+      triedModels.add(decision.model);
 
       const cap = adapter.capabilities(decision.model);
       const estTokens = estimateTokens(messages);
@@ -183,40 +193,50 @@ export class RoutingEngine {
         attempts.push(trace0);
         state.recordFailure(adapter.name, classified.kind, classified.message, classified.retryAfterSec ?? null);
         providersFailed.add(adapter.name);
+        providerFailCounts.set(adapter.name, (providerFailCounts.get(adapter.name) ?? 0) + 1);
         lastError = { kind: classified.kind, message: classified.message };
-
-        if (attempt > this.deps.maxRetries) break;
 
         if (classified.kind === "context_overflow") {
           // trim and retry same model
           const capCtx = adapter.contextLimit(decision.model);
           const shrunk = shrinkMessages(messages, Math.floor(capCtx * CONTEXT_RETRY_SHRINK));
-          if (shrunk.length >= messages.length) {
-            // cannot shrink further → switch model
+          if (shrunk.length >= messages.length || sameModelTries >= this.deps.maxRetries) {
+            // cannot shrink further (or retry budget for this model spent) → switch
             fallbackCount++;
-            decision = await this.nextCandidate(ctx, decision.model, lastError, decision.provider);
+            const next = this.nextCandidate(ctx, triedModels, lastError, decision.provider, providerFailCounts);
+            if (!next) break;
+            decision = next;
+            sameModelTries = 0;
             continue;
           }
           messages = shrunk;
           retryCount++;
+          sameModelTries++;
           continue;
         }
 
         if (classified.switchProvider) {
           // try same model once on retryable errors, then switch
-          if (classified.retryable && attempt <= this.deps.maxRetries - 1 && attempt === 1) {
+          if (classified.retryable && fallbackCount === 0 && sameModelTries === 0 && this.deps.maxRetries >= 2) {
             retryCount++;
+            sameModelTries++;
             await backoff(attempt);
             continue;
           }
           fallbackCount++;
-          decision = await this.nextCandidate(ctx, decision.model, lastError, decision.provider);
+          const next = this.nextCandidate(ctx, triedModels, lastError, decision.provider, providerFailCounts);
+          if (!next) break;
+          decision = next;
+          sameModelTries = 0;
           continue;
         }
 
-        // non-retryable (e.g. auth, bad request) → try next candidate once
+        // non-retryable (e.g. auth, bad request) → try next candidate
         fallbackCount++;
-        decision = await this.nextCandidate(ctx, decision.model, lastError, decision.provider);
+        const next = this.nextCandidate(ctx, triedModels, lastError, decision.provider, providerFailCounts);
+        if (!next) break;
+        decision = next;
+        sameModelTries = 0;
       }
     }
 
@@ -264,43 +284,53 @@ export class RoutingEngine {
    * model — failover must then prefer a different provider outright. */
   private static PROVIDER_LEVEL_KINDS = new Set(["timeout", "connection", "server", "rate_limit", "quota_exhausted"]);
 
-  /** Pick the next-best candidate, excluding tried models. In-flight failover
-   * ignores the circuit breaker (which gates NEW requests, not the current one)
-   * but still respects quota exhaustion. Free-first: remaining free-tier
-   * candidates are preferred before any paid model; strict FREE mode throws
-   * when its free pool runs out instead of spending money. After a
-   * provider-level failure (timeout/connection/5xx/429/quota) the next
-   * candidate is taken from a DIFFERENT provider when one exists — capability
-   * compatibility is already guaranteed by the hard filters in scoreCandidates.
-   * Throws a classified error when no alternatives remain (better diagnostics). */
+  /** Hard cap on candidate SWITCHES per request (on top of maxRetries
+   * same-model retries). High enough to sweep every provider realistically in
+   * the pool, low enough that a total outage still terminates. */
+  static MAX_FAILOVERS = 12;
+
+  /** Pick the next-best candidate, excluding every model already TRIED in this
+   * request (no ping-pong). In-flight failover ignores the circuit breaker
+   * (which gates NEW requests, not the current one) but still respects quota
+   * exhaustion. Free-first: remaining free-tier candidates are preferred
+   * before any paid model; strict FREE mode returns null when its free pool
+   * runs out instead of spending money. After a provider-level failure
+   * (timeout/connection/5xx/429/quota) the next candidate is taken from a
+   * DIFFERENT provider when one exists, and providers that already failed 2+
+   * times in this request are skipped unless nothing else remains — one dead
+   * provider can never consume the whole failover budget. Returns null when
+   * no alternative candidates remain. */
   private nextCandidate(
     ctx: DecisionContext,
-    excludeModel: string,
+    triedModels: Set<string>,
     lastError?: { kind: string; message: string },
-    failedProvider?: string
-  ) {
+    failedProvider?: string,
+    providerFailCounts?: Map<string, number>
+  ): RoutingDecision | null {
     const { scored } = scoreCandidates(ctx, { ignoreCircuit: true });
-    const rest = scored.filter((c) => c.model !== excludeModel);
+    const rest = scored.filter((c) => !triedModels.has(c.model));
     const freeRest = rest.filter((c) => c.free === true);
     let candidates = rest;
     if (freeRest.length > 0 && ((this.deps.freeFirst ?? true) || ctx.mode === "free")) {
       candidates = freeRest;
     } else if (ctx.mode === "free") {
-      const detail = lastError ? ` (${lastError.kind}: ${lastError.message.slice(0, 200)})` : "";
-      throw new ClassifiedUpstreamError("server", 503, `No free-tier alternative candidates available for failover${detail}`);
+      // strict free mode: never spend money on failover; route() surfaces the
+      // exhaustion error with the last real failure attached.
+      return null;
     }
+    if (candidates.length === 0) return null;
+    const fails = (name: string) => providerFailCounts?.get(name) ?? 0;
     const providerLevel = lastError != null && RoutingEngine.PROVIDER_LEVEL_KINDS.has(lastError.kind);
+    const fresh = candidates.filter((c) => fails(c.provider) < 2);
+    const pool = fresh.length > 0 ? fresh : candidates;
     const next =
-      (providerLevel && failedProvider ? candidates.find((c) => c.provider !== failedProvider) : undefined) ?? candidates[0];
-    if (!next) {
-      const detail = lastError ? ` (${lastError.kind}: ${lastError.message.slice(0, 200)})` : "";
-      throw new ClassifiedUpstreamError("server", 503, `No alternative candidates available for failover${detail}`);
-    }
+      (providerLevel && failedProvider ? pool.find((c) => c.provider !== failedProvider) : undefined) ?? pool[0];
+    if (!next) return null;
     return {
       provider: next.provider,
       model: next.model,
       score: next.score,
-      reason: `failover from ${excludeModel}${providerLevel && next.provider !== failedProvider ? ` (provider ${failedProvider} failed)` : ""}`,
+      reason: `failover from ${[...triedModels].slice(-1)[0] ?? "?"}${providerLevel && next.provider !== failedProvider ? ` (provider ${failedProvider} failed)` : ""}`,
       decisionSource: "fallback-chain" as const,
       candidates: scored.slice(0, 8),
       rejected: [],

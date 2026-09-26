@@ -78,6 +78,34 @@ describe("failover matrix", () => {
     expect(out.response.choices[0]?.finish_reason).toBe("length");
   });
 
+  it("never errors while any provider can serve: sweeps past MULTIPLE failing providers", async () => {
+    // regression for the "one provider dies mid-chain, another continues" guarantee:
+    // the old total-attempt budget (maxRetries+1) starved later providers.
+    const mk = (id: string) =>
+      ({ id, tier: "mid", tools: true, context: 128_000, inputCostCentsPerMTok: 5 }) as const;
+    const a = new StubAdapter("a", [mk("a:1"), mk("a:2")], { failAll: "connection" });
+    const b = new StubAdapter("b", [mk("b:1"), mk("b:2")], { failAll: "connection" });
+    const c = new StubAdapter("c", [mk("c:1")]);
+    const { engine } = makeMultiHarness({
+      providers: [{ adapter: a }, { adapter: b }, { adapter: c }],
+      maxRetries: 1,
+    });
+    const out = await routeMulti(engine, {}, "auto");
+    expect(out.response.choices[0]?.message.content).toBeTruthy();
+    expect(out.trace.attempts.find((x) => x.ok)?.provider).toBe("c");
+    expect(out.trace.providersFailed).toEqual(expect.arrayContaining(["a", "b"]));
+  });
+
+  it("a model that already failed is never re-attempted within one request", async () => {
+    const a = new StubAdapter("a", MODELS, { failAll: "connection" });
+    const b = new StubAdapter("b", MODELS_B);
+    const { engine } = makeMultiHarness({ providers: [{ adapter: a }, { adapter: b }], maxRetries: 1 });
+    const out = await routeMulti(engine, {}, "auto");
+    const failedModels = out.trace.attempts.filter((x) => !x.ok).map((x) => x.model);
+    expect(new Set(failedModels).size).toBe(failedModels.length);
+    expect(out.trace.attempts.find((x) => x.ok)).toBeTruthy();
+  });
+
   it("exhausted retry budget surfaces the original error kind", async () => {
     const a = new StubAdapter("a", MODELS, { failAll: "rate_limit" });
     const { engine } = makeMultiHarness({ providers: [{ adapter: a }], maxRetries: 1 });

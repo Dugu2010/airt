@@ -339,8 +339,9 @@ async function routePinned(req: ChatCompletionRequest, mode: RoutingMode) {
   // approach: call engine.route but with the pinned model injected as first candidate via
   // a temporary decision override is complex; instead inline a small loop here.
   const attempts: AttemptTrace[] = [];
-  let lastErr: unknown = null;
-  for (const cand of order.slice(0, 3)) {
+  // exhaustive failover, same budget as the engine: sweep the whole ordered
+  // candidate list (capped) instead of giving up after 3 tries.
+  for (const cand of order.slice(0, 1 + RoutingEngine.MAX_FAILOVERS)) {
     const entry = providers.find((p) => p.adapter.name === cand.provider);
     if (!entry) continue;
     try {
@@ -408,10 +409,13 @@ async function routePinned(req: ChatCompletionRequest, mode: RoutingMode) {
         error: classified,
       });
       entry.state.recordFailure(cand.provider, classified.kind, classified.message, classified.retryAfterSec ?? null);
-      lastErr = err;
     }
   }
-  throw lastErr ?? new Error("Pinned routing failed");
+  const last = attempts[attempts.length - 1]?.error;
+  throw new Error(
+    `Routing exhausted after ${attempts.length} attempt(s)` +
+      (last ? `. Last error (${last.kind}): ${last.message.slice(0, 200)}` : "")
+  );
 }
 
 /** Stream or JSON response dispatch. */
