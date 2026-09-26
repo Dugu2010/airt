@@ -289,8 +289,10 @@ const server = createServer(async (req, res) => {
       // precedence: explicit routing_mode wins; otherwise full auto
       const mode: RoutingMode = parseMode(body.routing_mode ?? "auto");
 
-      // Explicit model request: honor it but route through the engine (health/failover still apply).
-      const effective: ChatCompletionRequest = body.model && body.model !== "router-auto" ? { ...body, model: body.model } : body;
+      // "auto"/"router-auto" mean "you pick" — strip the field so the routing
+      // engine (AI decisions included) runs instead of a pinned-model miss.
+      const isAutoAlias = body.model === "router-auto" || body.model === "auto";
+      const effective: ChatCompletionRequest = isAutoAlias ? { ...body, model: undefined } : body;
 
       if (effective.model) {
         // pinned model: honor it first, failover to best candidate
